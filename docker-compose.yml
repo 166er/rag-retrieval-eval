@@ -1,0 +1,155 @@
+
+# Wiederverwendbarer GPU-Block via YAML-Anchor (&gpu_all). Alle drei Services
+# müssen sich GPU + Unified Memory des GPU-Host teilen, daher derselbe Block.
+# Mit `*gpu_all` wird er weiter unten wieder eingebunden, ohne dass
+# man ihn dreimal kopieren muss.
+x-gpu-all: &gpu_all
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: ["gpu"]
+
+services:
+  vllm-gpt-oss-120b:
+    image: nvcr.io/nvidia/vllm:26.03.post1-py3
+    container_name: vllm-gpt-oss-120b
+    restart: unless-stopped
+    # `--gpus all` (siehe gemeinsamer GPU-Block oben)
+    deploy: *gpu_all
+
+    ipc: host
+
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack: 67108864
+
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      # Schnellerer Modell-Download (mehrere parallele Streams)
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+
+    volumes:
+      - ${HF_CACHE_DIR}:/root/.cache/huggingface
+      # Zusätzlich: vorab lokal abgelegte Modellgewichte (read-only :ro)
+      - ${MODELS_DIR}/gpt-oss-120b:/models/gpt-oss-120b:ro
+
+    ports:
+      # Host-Port 5678 → Container-Port 8000
+      - "5678:8000"
+
+    command: >
+      vllm serve openai/gpt-oss-120b
+      --host 0.0.0.0
+      --port 8000
+      --gpu-memory-utilization 0.7
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s   # Modell-Laden dauert beim ersten Start lange
+
+
+  # ---------------------------------------------------------------------------
+  # BGE-M3 Embedding-Dienst (Dense + Sparse).
+  #
+  # Dieser Dienst kapselt FlagEmbedding als HTTP-Microservice und gibt Dense + Sparse aus einem Forward-Pass aus.
+  # ---------------------------------------------------------------------------
+  bge-m3-embeddings:
+    build: ./sparse-service
+    container_name: bge-m3-embeddings
+    restart: unless-stopped
+    deploy: *gpu_all
+    ipc: host
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack: 67108864
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - EMBEDDING_MODEL=BAAI/bge-m3
+    volumes:
+      - ${HF_CACHE_DIR}:/root/.cache/huggingface
+    ports:
+      - "8082:80"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s   # erster Start lädt das Modell
+
+
+  tei-reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:121-latest
+    container_name: tei-reranker
+    restart: unless-stopped
+
+    deploy: *gpu_all
+
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+
+    volumes:
+      - ${HF_CACHE_DIR}:/data
+
+    ports:
+      # Host-Port 8081 → Container-Port 80
+      - "8081:80"
+
+    command: >
+      --model-id BAAI/bge-reranker-v2-m3
+      --max-batch-tokens 16384
+      --max-client-batch-size 128
+      --auto-truncate
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+
+  # ---------------------------------------------------------------------------
+  # Judge-Modell fuer die RAGAS-Bewertung (Qwen3-32B via vLLM).
+  #
+  # Liegt hinter dem Compose-Profil "judge", erscheint also NUR mit `--profile judge`.
+  # Host-Port 8001 -> Container 8000 (JUDGE_BASE_URL=http://DGX-HOST:8001/v1).
+  # ---------------------------------------------------------------------------
+  vllm-qwen3-judge:
+    image: nvcr.io/nvidia/vllm:26.03.post1-py3
+    container_name: vllm-qwen3-judge
+    profiles: ["judge"]
+    restart: unless-stopped
+    deploy: *gpu_all
+    ipc: host
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      stack: 67108864
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+    volumes:
+      - ${HF_CACHE_DIR}:/root/.cache/huggingface
+    ports:
+      - "8001:8000"
+    command: >
+      vllm serve Qwen/Qwen3-32B
+      --host 0.0.0.0 --port 8000
+      --dtype bfloat16
+      --gpu-memory-utilization 0.85
+      --seed 42
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s

@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.23.4
+    restart: always
+
+    environment:
+      - N8N_HOST=${SUBDOMAIN}.${DOMAIN_NAME}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_DEFAULT_LOCALE=de
+      - N8N_SECURE_COOKIE=${N8N_SECURE_COOKIE}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      # - WEBHOOK_URL=http://${SUBDOMAIN}.${DOMAIN_NAME}/
+      - NODE_ENV=production
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - RAG_VLLM_BASE=${RAG_VLLM_BASE}
+      - RAG_EMBED_BASE=${RAG_EMBED_BASE}
+      - RAG_RERANK_BASE=${RAG_RERANK_BASE}
+      - RAG_QDRANT_BASE=${RAG_QDRANT_BASE}
+      - RAG_QDRANT_COLLECTION=${RAG_QDRANT_COLLECTION}
+      
+    ports:
+      - "5678:5678"
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+  
+volumes:
+  postgres_data:
+  n8n_data:
+
+networks:
+  default:
+    name: rag-net
+    external: true  

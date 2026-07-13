@@ -1,0 +1,4 @@
+{"retrieved": [{"chunkId":"A","rerankScore":0.99,"text":"a","source":"pdf","docId":"d","headingPath":"h","pageNumber":1},
+               {"chunkId":"B","rerankScore":0.10,"text":"b","source":"pdf","docId":"d","headingPath":"h","pageNumber":2}],
+ "contexts": [{"chunkId":"A","rerankScore":0.99,"text":"a"}],
+ "answer": "Antwort A."}

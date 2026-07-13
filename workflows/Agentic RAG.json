@@ -1,0 +1,1093 @@
+{
+  "name": "Agentic RAG",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "96466743-2978-4982-801f-731d1d9ac471",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agentic-rag",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "e428ab20-eaa9-4c0e-9b18-cbc961233716",
+      "name": "Webhook (Eval)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        208
+      ],
+      "webhookId": "563c131e-7f77-4475-9783-e19a31c8e17c"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "t1",
+              "name": "query",
+              "type": "string",
+              "value": "Was ist ein Beispielquery?"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7541fbad-d010-4458-98e1-7bfe6c72b44d",
+      "name": "Test-Query",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "query",
+              "type": "string",
+              "value": "={{ $json.body ? $json.body.query : $json.query }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6b2fec83-d370-4076-9a93-ac128da845da",
+      "name": "Eingang",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        448,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_VLLM_BASE }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"openai/gpt-oss-120b\", temperature: 0, seed: 42, messages: [{ role: \"system\", content: \"Du analysierst Nutzeranfragen für ein deutschsprachiges Retrieval-System und zerlegst sie in Teilfragen. Ist die Anfrage einfach (ein Aspekt), gib genau eine präzisierte Teilfrage zurück. Ist sie komplex oder mehrteilig, zerlege sie in höchstens 4 eigenständig beantwortbare Teilfragen. Antworte ausschließlich mit JSON im Format {\\\"subQueries\\\": [\\\"...\\\"]} ohne weitere Erklärung.\" }, { role: \"user\", content: $json.query }] }) }}",
+        "options": {}
+      },
+      "id": "d83919e6-ca31-4e20-a38a-a6b306d3afdb",
+      "name": "Decomposition I1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        672,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// JSON aus der LLM-Antwort extrahieren (robust gegen Codefences/Fließtext)\nconst raw = $input.first().json.choices[0].message.content;\nconst parsed = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]);\nreturn [{ json: {\n\tquery: $('Eingang').first().json.query,\n\titeration: 1,\n\tsubQueries: parsed.subQueries.slice(0, 4),\n} }];"
+      },
+      "id": "52a674da-670b-4703-8744-49b97f83670e",
+      "name": "Teilfragen parsen I1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ein Item pro Teilfrage, nachfolgende HTTP-Nodes laufen einmal je Teilfrage\nreturn $input.first().json.subQueries.map(sq => ({ json: { subQuery: sq } }));"
+      },
+      "id": "875cc965-e7d3-43f8-8ca1-6daad586d477",
+      "name": "Teilfragen aufteilen I1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_EMBED_BASE }}/embed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ inputs: [$json.subQuery] }) }}",
+        "options": {}
+      },
+      "id": "a9f4c69a-daa7-439f-9011-92dd18dbb4f0",
+      "name": "Embedding I1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1328,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_QDRANT_BASE }}/collections/{{ $env.RAG_QDRANT_COLLECTION }}/points/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ prefetch: [{ query: $json.dense[0], using: \"dense\", limit: 20 }, { query: { indices: $json.sparse[0].indices, values: $json.sparse[0].values }, using: \"sparse\", limit: 20 }], query: { fusion: \"rrf\" }, limit: 10, with_payload: true }) }}",
+        "options": {}
+      },
+      "id": "93646931-73ef-437d-bc65-0af54e7db8fe",
+      "name": "Hybrid Retrieval I1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1552,
+        160
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "qdrant api"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_RERANK_BASE }}/rerank",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('Teilfragen aufteilen I1').item.json.subQuery, texts: $json.result.points.map(p => p.payload.text), truncate: true }) }}",
+        "options": {}
+      },
+      "id": "1056f99f-ed49-45e1-ab4d-15ca7427be37",
+      "name": "Reranking I1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1760,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rerank-Ausgaben den Teilfragen zuordnen. Gruppen folgen der Reihenfolge der\n// Retrieval-Items, Gruppengröße = Anzahl der Punkte des jeweiligen Retrievals\nconst retrievals = $('Hybrid Retrieval I1').all();\nconst subs = $('Teilfragen aufteilen I1').all().map(i => i.json.subQuery);\nconst flat = $input.all().map(i => i.json);\nlet pos = 0;\nconst collected = [];\nfor (let s = 0; s < retrievals.length; s++) {\n\tconst points = retrievals[s].json.result.points;\n\tconst group = flat.slice(pos, pos + points.length);\n\tpos += points.length;\n\tfor (const r of group.slice(0, 10)) {\n\t\tconst p = points[r.index];\n\t\tcollected.push({\n\t\t\tchunkId: p.id, rerankScore: r.score, subQuery: subs[s], iteration: 1,\n\t\t\ttext: p.payload.text, source: p.payload.source, title: p.payload.title,\n\t\t\tdocId: p.payload.doc_id,\n\t\t\theadingPath: Array.isArray(p.payload.heading_path) ? p.payload.heading_path.join(\" > \") : p.payload.heading_path,\n\t\t\tpageNumber: p.payload.page_number,\n\t\t});\n\t}\n}\n// Deduplikation per chunkID, beste Score-Instanz gewinnt, Herkunft bleibt erhalten\nconst byId = new Map();\nfor (const c of collected) {\n\tconst e = byId.get(c.chunkId);\n\tif (!e || c.rerankScore > e.rerankScore) byId.set(c.chunkId, c);\n}\nconst state = $('Teilfragen parsen I1').first().json;\nreturn [{ json: { ...state, collected: [...byId.values()] } }];"
+      },
+      "id": "894a9b36-db73-4dab-b636-42f8cc6af8d0",
+      "name": "Sammeln I1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_VLLM_BASE }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"openai/gpt-oss-120b\", temperature: 0, seed: 42, messages: [{ role: \"system\", content: \"Du prüfst, ob der gesammelte Kontext ausreicht, um die Frage vollständig zu beantworten. Antworte ausschließlich mit JSON im Format {\\\"sufficient\\\": true, \\\"missing\\\": \\\"...\\\"}, sufficient ist false, wenn wesentliche Teilaspekte der Frage durch die Passagen nicht abgedeckt sind. missing beschreibt dann kurz die fehlende Information.\" }, { role: \"user\", content: \"Frage: \" + $json.query + \"\\n\\nIteration: \" + $json.iteration + \"\\n\\nGesammelte Passagen:\\n\" + $json.collected.slice().sort((a, b) => b.rerankScore - a.rerankScore).slice(0, 8).map(c => \"- [\" + c.title + \"] \" + c.text.slice(0, 300)).join(\"\\n\") }] }) }}",
+        "options": {}
+      },
+      "id": "3841f3cc-4323-4812-80a6-61893827fdfb",
+      "name": "Suffizienz-Check I1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2208,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices[0].message.content;\nconst verdict = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]);\nconst state = $('Sammeln I1').first().json;\nreturn [{ json: { ...state, sufficient: verdict.sufficient === true, missing: verdict.missing || \"\" } }];"
+      },
+      "id": "6ebf8225-f834-4f21-8e2c-3e50642f56f2",
+      "name": "Suffizienz parsen I1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2432,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "i1c",
+              "leftValue": "={{ $json.sufficient }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "79839df7-8688-40aa-8688-fd8286659a44",
+      "name": "Ausreichend? I1",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2640,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_VLLM_BASE }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"openai/gpt-oss-120b\", temperature: 0, seed: 42, messages: [{ role: \"system\", content: \"Du bildest zusätzliche Teilfragen für ein deutschsprachiges Retrieval-System. Die bisherige Recherche hat die Frage noch nicht vollständig beantwortet. Bilde höchstens 2 neue, gezielte Teilfragen, die die fehlende Information adressieren. Antworte ausschließlich mit JSON im Format {\\\"subQueries\\\": [\\\"...\\\"]} ohne weitere Erklärung.\" }, { role: \"user\", content: \"Frage: \" + $json.query + \"\\nBisherige Teilfragen: \" + $json.subQueries.join(\" | \") + \"\\nFehlende Information: \" + $json.missing }] }) }}",
+        "options": {}
+      },
+      "id": "f5319a41-db38-4598-b787-69752fa9d72f",
+      "name": "Decomposition I2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2864,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices[0].message.content;\nconst parsed = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]);\nconst state = $('Suffizienz parsen I1').first().json;\nconst newSubQueries = parsed.subQueries.slice(0, 2);\nreturn [{ json: { ...state, iteration: 2, newSubQueries, subQueries: [...state.subQueries, ...newSubQueries] } }];"
+      },
+      "id": "5ff99133-262c-4017-9924-ee8e0887d71f",
+      "name": "Teilfragen parsen I2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3088,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nur die NEUEN Teilfragen dieser Iteration retrieven\nreturn $input.first().json.newSubQueries.map(sq => ({ json: { subQuery: sq } }));"
+      },
+      "id": "97b17a69-5029-46b2-91af-081ab7690510",
+      "name": "Teilfragen aufteilen I2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3312,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_EMBED_BASE }}/embed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ inputs: [$json.subQuery] }) }}",
+        "options": {}
+      },
+      "id": "6fb60b63-677c-4e25-a405-14e5adadc0c3",
+      "name": "Embedding I2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3520,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_QDRANT_BASE }}/collections/{{ $env.RAG_QDRANT_COLLECTION }}/points/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ prefetch: [{ query: $json.dense[0], using: \"dense\", limit: 20 }, { query: { indices: $json.sparse[0].indices, values: $json.sparse[0].values }, using: \"sparse\", limit: 20 }], query: { fusion: \"rrf\" }, limit: 10, with_payload: true }) }}",
+        "options": {}
+      },
+      "id": "f2a16303-f9ce-46f8-9dcd-93558e8de098",
+      "name": "Hybrid Retrieval I2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3744,
+        384
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "qdrant api"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_RERANK_BASE }}/rerank",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('Teilfragen aufteilen I2').item.json.subQuery, texts: $json.result.points.map(p => p.payload.text), truncate: true }) }}",
+        "options": {}
+      },
+      "id": "c8e94125-baf3-4436-b341-18b06ae9b9d0",
+      "name": "Reranking I2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3968,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const retrievals = $('Hybrid Retrieval I2').all();\nconst subs = $('Teilfragen aufteilen I2').all().map(i => i.json.subQuery);\nconst flat = $input.all().map(i => i.json);\nlet pos = 0;\nconst collected = [];\nfor (let s = 0; s < retrievals.length; s++) {\n\tconst points = retrievals[s].json.result.points;\n\tconst group = flat.slice(pos, pos + points.length);\n\tpos += points.length;\n\tfor (const r of group.slice(0, 10)) {\n\t\tconst p = points[r.index];\n\t\tcollected.push({\n\t\t\tchunkId: p.id, rerankScore: r.score, subQuery: subs[s], iteration: 2,\n\t\t\ttext: p.payload.text, source: p.payload.source, title: p.payload.title,\n\t\t\tdocId: p.payload.doc_id,\n\t\t\theadingPath: Array.isArray(p.payload.heading_path) ? p.payload.heading_path.join(\" > \") : p.payload.heading_path,\n\t\t\tpageNumber: p.payload.page_number,\n\t\t});\n\t}\n}\n// Mit dem bisherigen Stand vereinigen, Dedup per chunkId (beste Score-Instanz)\nconst state = $('Teilfragen parsen I2').first().json;\nconst byId = new Map();\nfor (const c of [...state.collected, ...collected]) {\n\tconst e = byId.get(c.chunkId);\n\tif (!e || c.rerankScore > e.rerankScore) byId.set(c.chunkId, c);\n}\nreturn [{ json: { ...state, collected: [...byId.values()] } }];"
+      },
+      "id": "bedf3678-9800-4452-aed7-63b5e8be7721",
+      "name": "Sammeln I2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4192,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_VLLM_BASE }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"openai/gpt-oss-120b\", temperature: 0, seed: 42, messages: [{ role: \"system\", content: \"Du prüfst, ob der gesammelte Kontext ausreicht, um die Frage vollständig zu beantworten. Antworte ausschließlich mit JSON im Format {\\\"sufficient\\\": true, \\\"missing\\\": \\\"...\\\"}, sufficient ist false, wenn wesentliche Teilaspekte der Frage durch die Passagen nicht abgedeckt sind. missing beschreibt dann kurz die fehlende Information.\" }, { role: \"user\", content: \"Frage: \" + $json.query + \"\\n\\nIteration: \" + $json.iteration + \"\\n\\nGesammelte Passagen:\\n\" + $json.collected.slice().sort((a, b) => b.rerankScore - a.rerankScore).slice(0, 8).map(c => \"- [\" + c.title + \"] \" + c.text.slice(0, 300)).join(\"\\n\") }] }) }}",
+        "options": {}
+      },
+      "id": "970ed515-8d4f-4ef0-a742-760423451e90",
+      "name": "Suffizienz-Check I2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4400,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices[0].message.content;\nconst verdict = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]);\nconst state = $('Sammeln I2').first().json;\nreturn [{ json: { ...state, sufficient: verdict.sufficient === true, missing: verdict.missing || \"\" } }];"
+      },
+      "id": "0defcd27-5225-4129-a03d-8a0c0870ba81",
+      "name": "Suffizienz parsen I2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4624,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "i2c",
+              "leftValue": "={{ $json.sufficient }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3faea2aa-0b01-402d-b023-8c95406d48b8",
+      "name": "Ausreichend? I2",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4848,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_VLLM_BASE }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"openai/gpt-oss-120b\", temperature: 0, seed: 42, messages: [{ role: \"system\", content: \"Du bildest zusätzliche Teilfragen für ein deutschsprachiges Retrieval-System. Die bisherige Recherche hat die Frage noch nicht vollständig beantwortet. Bilde höchstens 2 neue, gezielte Teilfragen, die die fehlende Information adressieren. Antworte ausschließlich mit JSON im Format {\\\"subQueries\\\": [\\\"...\\\"]} ohne weitere Erklärung.\" }, { role: \"user\", content: \"Frage: \" + $json.query + \"\\nBisherige Teilfragen: \" + $json.subQueries.join(\" | \") + \"\\nFehlende Information: \" + $json.missing }] }) }}",
+        "options": {}
+      },
+      "id": "ae25c1eb-c85e-40ec-9d5a-6dd0f8541a94",
+      "name": "Decomposition I3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5072,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices[0].message.content;\nconst parsed = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]);\nconst state = $('Suffizienz parsen I2').first().json;\nconst newSubQueries = parsed.subQueries.slice(0, 2);\nreturn [{ json: { ...state, iteration: 3, newSubQueries, subQueries: [...state.subQueries, ...newSubQueries] } }];"
+      },
+      "id": "72cb90dc-6235-4c7e-88ad-a83bdfa9e22b",
+      "name": "Teilfragen parsen I3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5280,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nur die NEUEN Teilfragen dieser Iteration retrieven\nreturn $input.first().json.newSubQueries.map(sq => ({ json: { subQuery: sq } }));"
+      },
+      "id": "8196cf95-49dd-4345-a53c-cf3b2aa65d2f",
+      "name": "Teilfragen aufteilen I3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5504,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_EMBED_BASE }}/embed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ inputs: [$json.subQuery] }) }}",
+        "options": {}
+      },
+      "id": "48169341-f756-4453-b1d3-9eb97c9db0a0",
+      "name": "Embedding I3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5728,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_QDRANT_BASE }}/collections/{{ $env.RAG_QDRANT_COLLECTION }}/points/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ prefetch: [{ query: $json.dense[0], using: \"dense\", limit: 20 }, { query: { indices: $json.sparse[0].indices, values: $json.sparse[0].values }, using: \"sparse\", limit: 20 }], query: { fusion: \"rrf\" }, limit: 10, with_payload: true }) }}",
+        "options": {}
+      },
+      "id": "45bdcc26-b56d-49ae-98c0-3313e29c5248",
+      "name": "Hybrid Retrieval I3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5952,
+        608
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "qdrant api"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_RERANK_BASE }}/rerank",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('Teilfragen aufteilen I3').item.json.subQuery, texts: $json.result.points.map(p => p.payload.text), truncate: true }) }}",
+        "options": {}
+      },
+      "id": "20e436e3-fd9e-4f27-9aa1-4cd4117a1273",
+      "name": "Reranking I3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        6160,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const retrievals = $('Hybrid Retrieval I3').all();\nconst subs = $('Teilfragen aufteilen I3').all().map(i => i.json.subQuery);\nconst flat = $input.all().map(i => i.json);\nlet pos = 0;\nconst collected = [];\nfor (let s = 0; s < retrievals.length; s++) {\n\tconst points = retrievals[s].json.result.points;\n\tconst group = flat.slice(pos, pos + points.length);\n\tpos += points.length;\n\tfor (const r of group.slice(0, 10)) {\n\t\tconst p = points[r.index];\n\t\tcollected.push({\n\t\t\tchunkId: p.id, rerankScore: r.score, subQuery: subs[s], iteration: 3,\n\t\t\ttext: p.payload.text, source: p.payload.source, title: p.payload.title,\n\t\t\tdocId: p.payload.doc_id,\n\t\t\theadingPath: Array.isArray(p.payload.heading_path) ? p.payload.heading_path.join(\" > \") : p.payload.heading_path,\n\t\t\tpageNumber: p.payload.page_number,\n\t\t});\n\t}\n}\n// Mit dem bisherigen Stand vereinigen, Dedupllikation per chunkId (beste Score-Instanz)\nconst state = $('Teilfragen parsen I3').first().json;\nconst byId = new Map();\nfor (const c of [...state.collected, ...collected]) {\n\tconst e = byId.get(c.chunkId);\n\tif (!e || c.rerankScore > e.rerankScore) byId.set(c.chunkId, c);\n}\nreturn [{ json: { ...state, collected: [...byId.values()] } }];"
+      },
+      "id": "194c8695-a3ae-4769-99db-3663853bd422",
+      "name": "Sammeln I3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6384,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Stop-Grund und finalen Zustand bestimmen, je nachdem, welcher Pfad lief.\n// Referenzen auf nicht ausgeführte Nodes werfen einen Fehler → try/catch als Pfad-Detektor.\nlet state = null, stopReason = null;\ntry { state = $('Sammeln I3').first().json; stopReason = \"Iterationslimit erreicht\"; } catch (e) {}\nif (!state) {\n\ttry {\n\t\tconst s2 = $('Suffizienz parsen I2').first().json;\n\t\tif (s2.sufficient) { state = s2; stopReason = \"Kontext ausreichend nach Iteration 2\"; }\n\t} catch (e) {}\n}\nif (!state) { state = $('Suffizienz parsen I1').first().json; stopReason = \"Kontext ausreichend nach Iteration 1\"; }\nreturn [{ json: { ...state, stopReason } }];"
+      },
+      "id": "93668fcb-43ac-44ed-8da2-625f5ae2b7e5",
+      "name": "Abschluss vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5072,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_RERANK_BASE }}/rerank",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.query, texts: $json.collected.map(c => c.text), truncate: true }) }}",
+        "options": {}
+      },
+      "id": "1c5ae4a7-8e84-4a0a-9707-b9896aacd087",
+      "name": "Final-Reranking (TEI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5280,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// global gegen die Originalfrage geordnet: volle Liste loggen (IR-Metriken),\n// bis zu 8 mit Score >= 0.2 als Synthese-Kontext (Budget + Rauschfilter, identisch zu Prototyp 1)\nconst state = $('Abschluss vorbereiten').first().json;\nconst ranks = $input.all().map(i => i.json); // [{index, score}] absteigend\nconst retrieved = ranks.map(r => ({ ...state.collected[r.index], finalScore: r.score })).slice(0,10);\nreturn [{ json: { ...state, retrieved, synthesisChunks: retrieved.filter(c => c.finalScore >= 0.2).slice(0, 8) } }];"
+      },
+      "id": "5b7360f5-fbf3-422a-9f93-d6f33e133e61",
+      "name": "Final-Mapping",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5504,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_VLLM_BASE }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"openai/gpt-oss-120b\", temperature: 0, seed: 42, messages: [{ role: \"system\", content: \"Beantworte die Frage ausschließlich auf Basis des bereitgestellten Kontexts. Jeder Kontextabschnitt beginnt mit einer Quellenangabe in eckigen Klammern. Belege deine Aussagen an den entsprechenden Stellen mit diesen Quellen und nenne dabei immer den Dokumentnamen sowie, falls vorhanden, Abschnitt und Seite. Wenn der Kontext nicht ausreicht, sage das. Antworte auf Deutsch.\" }, { role: \"user\", content: \"Kontext:\\n\" + $json.synthesisChunks.map(c => \"[Quelle: \" + [c.title, c.headingPath, c.pageNumber ? \"S. \" + c.pageNumber : null].filter(Boolean).join(\" | \") + \"]\\n\" + c.text).join(\"\\n---\\n\") + \"\\n\\nFrage: \" + $json.query }] }) }}",
+        "options": {}
+      },
+      "id": "2fd32b5e-8e17-45af-9068-e33883316af2",
+      "name": "Synthese (vLLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5728,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "o1",
+              "name": "query",
+              "type": "string",
+              "value": "={{ $('Abschluss vorbereiten').first().json.query }}"
+            },
+            {
+              "id": "o2",
+              "name": "subQueries",
+              "type": "array",
+              "value": "={{ $('Abschluss vorbereiten').first().json.subQueries }}"
+            },
+            {
+              "id": "o3",
+              "name": "iterations",
+              "type": "number",
+              "value": "={{ $('Abschluss vorbereiten').first().json.iteration }}"
+            },
+            {
+              "id": "o4",
+              "name": "stopReason",
+              "type": "string",
+              "value": "={{ $('Abschluss vorbereiten').first().json.stopReason }}"
+            },
+            {
+              "id": "o5",
+              "name": "retrieved",
+              "type": "array",
+              "value": "={{ $('Final-Mapping').first().json.retrieved }}"
+            },
+            {
+              "id": "o6",
+              "name": "contexts",
+              "type": "array",
+              "value": "={{ $('Final-Mapping').first().json.synthesisChunks }}"
+            },
+            {
+              "id": "o7",
+              "name": "answer",
+              "type": "string",
+              "value": "={{ $json.choices[0].message.content }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "84e99f12-1768-4c33-9b6d-ebf5f0447a06",
+      "name": "Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5952,
+        160
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Test-Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook (Eval)": {
+      "main": [
+        [
+          {
+            "node": "Eingang",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test-Query": {
+      "main": [
+        [
+          {
+            "node": "Eingang",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eingang": {
+      "main": [
+        [
+          {
+            "node": "Decomposition I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decomposition I1": {
+      "main": [
+        [
+          {
+            "node": "Teilfragen parsen I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teilfragen parsen I1": {
+      "main": [
+        [
+          {
+            "node": "Teilfragen aufteilen I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teilfragen aufteilen I1": {
+      "main": [
+        [
+          {
+            "node": "Embedding I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embedding I1": {
+      "main": [
+        [
+          {
+            "node": "Hybrid Retrieval I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hybrid Retrieval I1": {
+      "main": [
+        [
+          {
+            "node": "Reranking I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reranking I1": {
+      "main": [
+        [
+          {
+            "node": "Sammeln I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sammeln I1": {
+      "main": [
+        [
+          {
+            "node": "Suffizienz-Check I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suffizienz-Check I1": {
+      "main": [
+        [
+          {
+            "node": "Suffizienz parsen I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suffizienz parsen I1": {
+      "main": [
+        [
+          {
+            "node": "Ausreichend? I1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ausreichend? I1": {
+      "main": [
+        [
+          {
+            "node": "Abschluss vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decomposition I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decomposition I2": {
+      "main": [
+        [
+          {
+            "node": "Teilfragen parsen I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teilfragen parsen I2": {
+      "main": [
+        [
+          {
+            "node": "Teilfragen aufteilen I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teilfragen aufteilen I2": {
+      "main": [
+        [
+          {
+            "node": "Embedding I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embedding I2": {
+      "main": [
+        [
+          {
+            "node": "Hybrid Retrieval I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hybrid Retrieval I2": {
+      "main": [
+        [
+          {
+            "node": "Reranking I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reranking I2": {
+      "main": [
+        [
+          {
+            "node": "Sammeln I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sammeln I2": {
+      "main": [
+        [
+          {
+            "node": "Suffizienz-Check I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suffizienz-Check I2": {
+      "main": [
+        [
+          {
+            "node": "Suffizienz parsen I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suffizienz parsen I2": {
+      "main": [
+        [
+          {
+            "node": "Ausreichend? I2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ausreichend? I2": {
+      "main": [
+        [
+          {
+            "node": "Abschluss vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decomposition I3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decomposition I3": {
+      "main": [
+        [
+          {
+            "node": "Teilfragen parsen I3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teilfragen parsen I3": {
+      "main": [
+        [
+          {
+            "node": "Teilfragen aufteilen I3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teilfragen aufteilen I3": {
+      "main": [
+        [
+          {
+            "node": "Embedding I3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embedding I3": {
+      "main": [
+        [
+          {
+            "node": "Hybrid Retrieval I3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hybrid Retrieval I3": {
+      "main": [
+        [
+          {
+            "node": "Reranking I3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reranking I3": {
+      "main": [
+        [
+          {
+            "node": "Sammeln I3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sammeln I3": {
+      "main": [
+        [
+          {
+            "node": "Abschluss vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Abschluss vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Final-Reranking (TEI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final-Reranking (TEI)": {
+      "main": [
+        [
+          {
+            "node": "Final-Mapping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final-Mapping": {
+      "main": [
+        [
+          {
+            "node": "Synthese (vLLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synthese (vLLM)": {
+      "main": [
+        [
+          {
+            "node": "Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

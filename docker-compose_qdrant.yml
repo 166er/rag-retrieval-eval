@@ -1,0 +1,38 @@
+
+# Qdrant Vektordatenbank mit nativer Hybrid-Search Unterstützung
+
+services:
+  qdrant:
+  
+    image: qdrant/qdrant:v1.13.4
+    container_name: qdrant
+    restart: always
+
+    environment:
+
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+
+      - QDRANT__LOG_LEVEL=INFO
+
+      - QDRANT__TELEMETRY_DISABLED=true
+
+    ports:
+
+      - "6333:6333"   # REST/HTTP (inkl. Dashboard)
+      - "6334:6334"   # gRPC
+
+    volumes:
+      # Persistenz: ohne dieses Volume sind beim Container-Neustart ALLE Vektoren weg.
+      - qdrant_storage:/qdrant/storage
+
+      - qdrant_snapshots:/qdrant/snapshots
+
+volumes:
+
+  qdrant_storage:
+  qdrant_snapshots:
+
+networks:
+  default:
+    name: rag-net
+    external: true

@@ -1,0 +1,4 @@
+FlagEmbedding
+peft
+fastapi
+uvicorn[standard]

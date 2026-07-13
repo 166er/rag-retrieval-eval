@@ -1,0 +1,3 @@
+{"query_id": "q1", "text": "Wie aktiviert man den Wartungsmodus automatisch?", "type": "factual", "source_target": ["pdf"], "notes": ""}
+{"query_id": "q2", "text": "Welche Felder hat das Aufgaben-Template?", "type": "factual", "source_target": ["confluence"], "notes": ""}
+{"query_id": "q3", "text": "Wie weit sind die Sterne weg?", "type": "unanswerable", "source_target": ["confluence"], "notes": ""}

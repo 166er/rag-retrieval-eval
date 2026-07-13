@@ -1,0 +1,396 @@
+{
+  "name": "Advanced RAG",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "2fcffc4c-0fad-4fef-8359-2f216d687e59",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "advanced-rag",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "be4d42d5-2153-486c-b91d-8917aa17fe7c",
+      "name": "Webhook (Eval)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        208
+      ],
+      "webhookId": "fa033b07-7514-41b9-ac44-9ecdb71b223c"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "query",
+              "type": "string",
+              "value": "Was ist ein Beispielquery?"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8f316eaa-da8c-4643-9261-be4f12d20a61",
+      "name": "Test-Query",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b1",
+              "name": "query",
+              "type": "string",
+              "value": "={{ $json.body ? $json.body.query : $json.query }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aae102fb-49b2-478f-b962-970b2dd101a7",
+      "name": "Eingang",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        448,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_VLLM_BASE }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"openai/gpt-oss-120b\", temperature: 0, seed: 42, messages: [{ role: \"system\", content: \"Du formulierst Nutzeranfragen in präzise, eigenständige Suchanfragen für ein deutschsprachiges Retrieval-System um. Ergänze relevante Fachbegriffe, löse Mehrdeutigkeiten und Pronomen auf. Gib ausschließlich die umformulierte Anfrage zurück, ohne Erklärung.\" }, { role: \"user\", content: $json.query }] }) }}",
+        "options": {}
+      },
+      "id": "4baf2b07-a3d6-4d0e-829e-58e104ab319a",
+      "name": "Query Rewriting",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        672,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "rewrittenQuery",
+              "type": "string",
+              "value": "={{ $json.choices[0].message.content.trim() }}"
+            },
+            {
+              "id": "c2",
+              "name": "query",
+              "type": "string",
+              "value": "={{ $('Eingang').first().json.query }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "79ec3f48-21fb-48bb-bc27-833b514e6d62",
+      "name": "Rewritten Query",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_EMBED_BASE }}/embed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ inputs: [$json.rewrittenQuery] }) }}",
+        "options": {}
+      },
+      "id": "ce289c6e-1062-44bb-bcfb-02b23341b991",
+      "name": "Embedding (BGE-M3)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1104,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_QDRANT_BASE }}/collections/{{ $env.RAG_QDRANT_COLLECTION }}/points/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ prefetch: [{ query: $json.dense[0], using: \"dense\", limit: 20 }, { query: { indices: $json.sparse[0].indices, values: $json.sparse[0].values }, using: \"sparse\", limit: 20 }], query: { fusion: \"rrf\" }, limit: 10, with_payload: true }) }}",
+        "options": {}
+      },
+      "id": "3509dc40-b41d-4cd1-9f71-5a1786708e79",
+      "name": "Hybrid Retrieval (Qdrant)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1328,
+        128
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "qdrant api"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_RERANK_BASE }}/rerank",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('Rewritten Query').first().json.rewrittenQuery, texts: $json.result.points.map(p => p.payload.text), truncate: true }) }}",
+        "options": {}
+      },
+      "id": "a5c2b52b-77f8-4f57-83b6-e3de89c05ccd",
+      "name": "Reranking (TEI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1552,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reranker-Indices zurück auf die Qdrant-Points mappen, volle Rangliste behalten (IR-Metriken @5/@10, Synthese nimmt Top-8, siehe Generation-Node)\nconst ranks = $input.all().map(i => i.json); // [{index, score}] absteigend sortiert\nconst points = $('Hybrid Retrieval (Qdrant)').first().json.result.points;\nconst rerankedChunks = ranks.map(r => ({\n\tchunkId: points[r.index].id,\n\trerankScore: r.score,\n\ttext: points[r.index].payload.text,\n\tsource: points[r.index].payload.source,\n\ttitle: points[r.index].payload.title,\n\tdocId: points[r.index].payload.doc_id,\n\theadingPath: Array.isArray(points[r.index].payload.heading_path) ? points[r.index].payload.heading_path.join(\" > \") : points[r.index].payload.heading_path,\n\tpageNumber: points[r.index].payload.page_number,\n}));\n// Pre-Rerank-Reihenfolge mitprotokollieren (erlaubt Ablation Reranker an/aus)\nconst preRerank = points.map(p => ({ chunkId: p.id, fusionScore: p.score }));\nreturn [{ json: { rerankedChunks, preRerank } }];"
+      },
+      "id": "d2fadcee-82e8-4c30-b67b-d9f556bd26a5",
+      "name": "Rerank-Mapping",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RAG_VLLM_BASE }}/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"openai/gpt-oss-120b\", temperature: 0, seed: 42, messages: [{ role: \"system\", content: \"Beantworte die Frage ausschließlich auf Basis des bereitgestellten Kontexts. Jeder Kontextabschnitt beginnt mit einer Quellenangabe in eckigen Klammern. Belege deine Aussagen an den entsprechenden Stellen mit diesen Quellen und nenne dabei immer den Dokumentnamen sowie, falls vorhanden, Abschnitt und Seite. Wenn der Kontext nicht ausreicht, sage das. Antworte auf Deutsch.\" }, { role: \"user\", content: \"Kontext:\\n\" + $json.rerankedChunks.filter(c => c.rerankScore >= 0.2).slice(0, 8).map(c => \"[Quelle: \" + [c.title, c.headingPath, c.pageNumber ? \"S. \" + c.pageNumber : null].filter(Boolean).join(\" | \") + \"]\\n\" + c.text).join(\"\\n---\\n\") + \"\\n\\nFrage: \" + $('Eingang').first().json.query }] }) }}",
+        "options": {}
+      },
+      "id": "df072eb0-dd41-4b4a-a986-074586cafa24",
+      "name": "Generation (vLLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1984,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1",
+              "name": "query",
+              "type": "string",
+              "value": "={{ $('Eingang').first().json.query }}"
+            },
+            {
+              "id": "d2",
+              "name": "rewrittenQuery",
+              "type": "string",
+              "value": "={{ $('Rewritten Query').first().json.rewrittenQuery }}"
+            },
+            {
+              "id": "d3",
+              "name": "retrieved",
+              "type": "array",
+              "value": "={{ $('Rerank-Mapping').first().json.rerankedChunks }}"
+            },
+            {
+              "id": "d4",
+              "name": "preRerank",
+              "type": "array",
+              "value": "={{ $('Rerank-Mapping').first().json.preRerank }}"
+            },
+            {
+              "id": "d5",
+              "name": "answer",
+              "type": "string",
+              "value": "={{ $json.choices[0].message.content }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fc272aea-9e1d-409a-b5a3-644ba54deeff",
+      "name": "Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2208,
+        128
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Test-Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook (Eval)": {
+      "main": [
+        [
+          {
+            "node": "Eingang",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test-Query": {
+      "main": [
+        [
+          {
+            "node": "Eingang",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eingang": {
+      "main": [
+        [
+          {
+            "node": "Query Rewriting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Rewriting": {
+      "main": [
+        [
+          {
+            "node": "Rewritten Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rewritten Query": {
+      "main": [
+        [
+          {
+            "node": "Embedding (BGE-M3)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embedding (BGE-M3)": {
+      "main": [
+        [
+          {
+            "node": "Hybrid Retrieval (Qdrant)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hybrid Retrieval (Qdrant)": {
+      "main": [
+        [
+          {
+            "node": "Reranking (TEI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reranking (TEI)": {
+      "main": [
+        [
+          {
+            "node": "Rerank-Mapping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rerank-Mapping": {
+      "main": [
+        [
+          {
+            "node": "Generation (vLLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generation (vLLM)": {
+      "main": [
+        [
+          {
+            "node": "Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
